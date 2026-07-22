@@ -1,0 +1,101 @@
+#!/usr/bin/env bash
+# capture — one front door for the voice-capture pipeline.
+#
+# Run it two ways:
+#   ./capture        shows a menu
+#   ./capture t      skips the menu: t = transcribe, v = view, l = list new
+#
+# It wraps the commands you already run by hand; it does not change
+# transcribe_all.py or touch your recordings.
+
+set -u
+
+# ── Settings — edit these lines if your paths differ ─────────────────────────
+RECORDINGS_DIR="$HOME/recordings"
+TRANSCRIBE_SCRIPT="$RECORDINGS_DIR/transcribe_all.py"
+ALL_TRANSCRIPTS="$RECORDINGS_DIR/ALL_transcripts.txt"
+VENV_DIR=""   # path to whisper-env; leave blank and it looks in common spots
+# ─────────────────────────────────────────────────────────────────────────────
+
+if [ -z "$VENV_DIR" ]; then
+  for candidate in "$HOME/whisper-env" "$RECORDINGS_DIR/whisper-env" "$HOME/.venvs/whisper-env" "$HOME/venvs/whisper-env"; do
+    if [ -x "$candidate/bin/python" ]; then
+      VENV_DIR="$candidate"
+      break
+    fi
+  done
+fi
+
+fail() { printf 'Problem: %s\n' "$1"; exit 1; }
+
+check_setup() {
+  [ -d "$RECORDINGS_DIR" ] || fail "can't find $RECORDINGS_DIR — edit RECORDINGS_DIR at the top of this script."
+  [ -f "$TRANSCRIBE_SCRIPT" ] || fail "can't find $TRANSCRIBE_SCRIPT — edit TRANSCRIBE_SCRIPT at the top of this script."
+  [ -n "$VENV_DIR" ] && [ -x "$VENV_DIR/bin/python" ] || fail "can't find the whisper-env venv — set VENV_DIR at the top of this script to wherever whisper-env lives."
+}
+
+# Every audio file in ~/recordings that has no matching .txt next to it yet.
+new_recordings() {
+  local f base
+  shopt -s nullglob nocaseglob
+  for f in "$RECORDINGS_DIR"/*.m4a "$RECORDINGS_DIR"/*.wav "$RECORDINGS_DIR"/*.mp3; do
+    base="${f%.*}"
+    [ -e "$base.txt" ] || printf '%s\n' "$f"
+  done
+  shopt -u nullglob nocaseglob
+}
+
+do_transcribe() {
+  check_setup
+  echo "Running transcription (whisper-large-v3-mlx)... this can take a while."
+  "$VENV_DIR/bin/python" "$TRANSCRIBE_SCRIPT"
+  echo
+  echo "Done. Combined transcript: $ALL_TRANSCRIPTS"
+}
+
+do_view() {
+  [ -f "$ALL_TRANSCRIPTS" ] || fail "no $ALL_TRANSCRIPTS yet — run a transcription first."
+  open "$ALL_TRANSCRIPTS"
+}
+
+do_list() {
+  [ -d "$RECORDINGS_DIR" ] || fail "can't find $RECORDINGS_DIR — edit RECORDINGS_DIR at the top of this script."
+  local list
+  list="$(new_recordings)"
+  if [ -z "$list" ]; then
+    echo "Nothing new — every recording already has a transcript."
+  else
+    echo "Not yet transcribed:"
+    printf '%s\n' "$list" | while IFS= read -r f; do
+      printf '  %s\n' "$(basename "$f")"
+    done
+  fi
+}
+
+menu() {
+  local new_count choice
+  new_count="$(new_recordings | grep -c . || true)"
+  echo
+  echo "── Capture ─────────────────────────────"
+  echo "  1) Transcribe new recordings ($new_count waiting)"
+  echo "  2) View all transcripts"
+  echo "  3) List recordings not yet transcribed"
+  echo "  q) Quit"
+  echo
+  read -rp "Pick one: " choice
+  case "$choice" in
+    1|t) do_transcribe ;;
+    2|v) do_view ;;
+    3|l) do_list ;;
+    q|Q) exit 0 ;;
+    *)  echo "Didn't catch that — type 1, 2, 3, or q." ;;
+  esac
+}
+
+case "${1:-}" in
+  t|transcribe) do_transcribe ;;
+  v|view)       do_view ;;
+  l|list)       do_list ;;
+  "")           menu ;;
+  *)            echo "Usage: capture [t|v|l]  (or no argument for the menu)"; exit 1 ;;
+esac
